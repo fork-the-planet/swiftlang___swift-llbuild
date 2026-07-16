@@ -1066,6 +1066,18 @@ private:
           }
         }
 
+        // If two rule scans form a cycle but there are no tasks running, the build could reach this point
+        // without successfully computing the requested key. I've observed this very rarely and unreliably
+        // in complex projects which I was unable to reproduce. When it occurs, rule scans from the "stuck"
+        // build with dangling pointers could persist to the next build and lead to crashes when accessed.
+        // For now, if we detect this scenario, diagnose an error asking the user to file a bug, and
+        // call `cancelRemainingTasks` to cleanup any active rule scan records.
+        if (!getRuleInfoForKey(buildKey).isComplete(this)) {
+          delegate.error("internal error: build engine has no running tasks or pending work, but was not able to compute the requested key, this may indicate a cycle in the build which could not be diagnosed. Please file a bug report.");
+          cancelRemainingTasks();
+          return false;
+        }
+
         // We didn't do any work, and we have nothing more we can/need to do.
         break;
       }
@@ -1371,6 +1383,8 @@ private:
     for (auto& it: ruleInfos) {
       // Cancel outstanding activity on rules
       if (it.second.isScanning()) {
+        freeRuleScanRecord(it.second.getPendingScanRecord());
+        it.second.setPendingScanRecord(nullptr);
         it.second.setCancelled();
       }
     }
